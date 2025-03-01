@@ -4,113 +4,90 @@ import google.generativeai as genai
 from sentence_transformers import SentenceTransformer
 import faiss
 import numpy as np
+from fuzzywuzzy import process
 
-# Custom CSS for styling
-st.markdown("""
-<style>
-    .stApp {
-        background: #f8f5e6;
-        background-image: radial-gradient(#d4d0c4 1px, transparent 1px);
-        background-size: 20px 20px;
-    }
-    .chat-font {
-        font-family: 'Times New Roman', serif;
-        color: #2c5f2d;
-    }
-    .user-msg {
-        background: #ffffff !important;
-        border-radius: 15px !important;
-        border: 2px solid #2c5f2d !important;
-    }
-    .bot-msg {
-        background: #fff9e6 !important;
-        border-radius: 15px !important;
-        border: 2px solid #ffd700 !important;
-    }
-    .stChatInput {
-        background: #ffffff;
-    }
-</style>
-""", unsafe_allow_html=True)
-
-# Configure Google Gemini
-genai.configure(api_key="AIzaSyByLfEfaGdpdZHHdcPgbQeRAISAFqFrv4s")  # Replace with your Gemini API key
+# Configure Gemini securely (avoid hardcoding API keys in production)
+genai.configure(api_key="YOUR_GEMINI_API_KEY")
 gemini = genai.GenerativeModel('gemini-1.5-flash')
 
-# Initialize models
-embedder = SentenceTransformer('all-MiniLM-L6-v2')  # Embedding model
+embedder = SentenceTransformer('all-MiniLM-L6-v2')
 
-# Load data and create FAISS index
 @st.cache_data
 def load_data():
-    try:
-        df = pd.read_csv('my_data.csv')  # Replace with your dataset file name
-        if 'question' not in df.columns or 'answer' not in df.columns:
-            st.error("The CSV file must contain 'question' and 'answer' columns.")
-            st.stop()
-        df['context'] = df.apply(
-            lambda row: f"Question: {row['question']}\nAnswer: {row['answer']}", 
-            axis=1
-        )
-        embeddings = embedder.encode(df['context'].tolist())
-        index = faiss.IndexFlatL2(embeddings.shape[1])  # FAISS index for similarity search
-        index.add(np.array(embeddings).astype('float32'))
-        return df, index
-    except Exception as e:
-        st.error(f"Failed to load data. Error: {e}")
-        st.stop()
+    df = pd.read_csv('my_data.csv')
+    df.dropna(subset=['question', 'answer'], inplace=True)
+    df['context'] = df.apply(
+        lambda row: f"Question: {row['question']}\nAnswer: {row['answer']}",
+        axis=1
+    )
+    embeddings = embedder.encode(df['context'].tolist())
+    index = faiss.IndexFlatL2(embeddings.shape[1])
+    index.add(np.array(embeddings).astype('float32'))
+    return df, index
 
-# Load dataset and FAISS index
 df, faiss_index = load_data()
 
-# App Header
-st.markdown('<h1 class="chat-font">🤖 Meenakshi Vinjamuri Bio</h1>', unsafe_allow_html=True)
-st.markdown('<h3 class="chat-font">Ask me anything, and I\'ll respond as Meenakshi!</h3>', unsafe_allow_html=True)
-st.markdown("---")
-
-# Function to find the closest matching question using FAISS
 def find_closest_question(query, faiss_index, df):
+    # First, try FAISS embedding search
     query_embedding = embedder.encode([query])
-    _, I = faiss_index.search(query_embedding.astype('float32'), k=1)  # Top 1 match
-    if I.size > 0:
-        return df.iloc[I[0][0]]['answer']  # Return the closest answer
+    D, I = faiss_index.search(query_embedding.astype('float32'), k=1)
+    if len(I) > 0 and I[0][0] != -1:
+        matched_idx = I[0][0]
+        matched_question = df.iloc[matched_idx]['question']
+        matched_answer = df.iloc[matched_idx]['answer']
+
+        # Optional: If distance is too high, fallback to fuzzy
+        if D[0][0] > 1.0:  # Adjust threshold as needed
+            # Use fuzzy matching as fallback
+            matched_answer = fuzzy_match_query(query, df)
+        return matched_answer
+    else:
+        # If no match found, use fuzzy matching
+        return fuzzy_match_query(query, df)
+
+def fuzzy_match_query(query, df):
+    questions = df["question"].tolist()
+    best_match, score = process.extractOne(query, questions)
+    if score >= 70:  # Adjust threshold
+        return df[df["question"] == best_match]["answer"].values[0]
     return None
 
-# Function to generate a refined answer using Gemini
 def generate_refined_answer(query, retrieved_answer):
-    prompt = f"""You are Meenakshi Vinjamuri, an AIML student. Respond to the following question in a friendly and conversational tone:
+    # Provide strong instructions to not override the CSV content
+    prompt = f"""
+    You are Meenakshi Vinjamuri, an AIML student.
+    You must strictly use the following retrieved answer as your source of truth.
+    
     Question: {query}
     Retrieved Answer: {retrieved_answer}
-    - Provide a detailed and accurate response.
-    - Ensure the response is grammatically correct and engaging.
+    
+    - DO NOT contradict the retrieved answer.
+    - Provide a friendly and conversational response, but keep the factual data unchanged.
+    - Keep it concise, clear, and engaging.
     """
     response = gemini.generate_content(prompt)
     return response.text
 
-# Chat Interface
+# Streamlit Chat
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-for message in st.session_state.messages:
-    with st.chat_message(message["role"], 
-                        avatar="🙋" if message["role"] == "user" else "🤖"):
-        st.markdown(message["content"])
+# Display chat history
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"], avatar="🙋" if msg["role"] == "user" else "🤖"):
+        st.markdown(msg["content"])
 
-if prompt := st.chat_input("Ask me anything..."):
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    
+# User Input
+user_input = st.chat_input("Ask me anything about Meenakshi's bio...")
+
+if user_input:
+    st.session_state.messages.append({"role": "user", "content": user_input})
     with st.spinner("Thinking..."):
-        try:
-            # Find the closest answer
-            retrieved_answer = find_closest_question(prompt, faiss_index, df)
-            if retrieved_answer:
-                # Generate a refined answer using Gemini
-                refined_answer = generate_refined_answer(prompt, retrieved_answer)
-                response = f":\n{refined_answer}"
-            else:
-                response = "Meenakshi Vinjamuri*:\nI'm sorry, I cannot answer that question."
-        except Exception as e:
-            response = f"An error occurred: {e}"
-    
-    st.session_state.messages.append({"role": "assistant", "content": response})
+        answer = find_closest_question(user_input, faiss_index, df)
+        if answer:
+            final_response = generate_refined_answer(user_input, answer)
+        else:
+            final_response = "I’m sorry, I don’t have an answer for that."
+
+    st.session_state.messages.append({"role": "assistant", "content": final_response})
     st.rerun()
