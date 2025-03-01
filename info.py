@@ -108,7 +108,7 @@ if prompt := st.chat_input("Ask me anything..."):
                 refined_answer = generate_refined_answer(prompt, retrieved_answer)
                 response = f":\n{refined_answer}"
             else:
-                response = "Meenakshi Vinjamuri"*:\nI'm sorry, I cannot answer that question."
+                response = "Meenakshi Vinjamuri*:\nI'm sorry, I cannot answer that question."
         except Exception as e:
             response = f"An error occurred: {e}"
     
