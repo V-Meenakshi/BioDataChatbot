@@ -1,0 +1,9 @@
+streamlit==1.32.0
+pandas==2.1.4
+google-generativeai==0.3.2
+sentence-transformers==2.2.2
+faiss-cpu  # Use precompiled version (remove version pinning)
+numpy==1.26.0
+scikit-learn==1.3.2
+fuzzywuzzy==0.18.0
+python-Levenshtein  # Remove version pinning to avoid build errors
